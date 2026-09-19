@@ -1,0 +1,109 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { width: 380px; font-family: system-ui; padding: 10px; margin: 0; position: relative; font-size: 13px; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .header h3 { margin: 0; font-size: 14px; }
+    .header #btnApiSettings { font-size: 11px; padding: 3px 8px; cursor: pointer; border: 1px solid #ccc; border-radius: 4px; background: #fff; color: #1976d2; }
+    .header #btnApiSettings:hover { background: #eef6ff; }
+    #apiSetting { display: none; padding: 8px; background: #fafafa; border: 1px solid #eee; border-radius: 4px; margin-bottom: 8px; }
+    #apiSetting label { display: block; font-size: 11px; color: #666; margin-bottom: 4px; }
+    #apiSetting input { width: 100%; padding: 4px; font-size: 11px; box-sizing: border-box; }
+    .toolbar { display: flex; gap: 4px; margin-bottom: 8px; }
+    .toolbar button { flex: 1; padding: 6px 2px; font-size: 11px; cursor: pointer; }
+    .toolbar button.active { background: #1976d2; color: #fff; border: 1px solid #1976d2; }
+    #status { font-size: 11px; color: #666; margin-bottom: 6px; min-height: 14px; }
+    #kb-filter { display: none; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; padding: 6px; background: #f7f7f7; border-radius: 4px; }
+    #word-filter { display: none; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; padding: 6px; background: #f7f7f7; border-radius: 4px; }
+    .tag-chip { font-size: 11px; padding: 2px 8px; border: 1px solid #ccc; border-radius: 10px; background: #fff; cursor: pointer; }
+    .tag-chip.active { background: #1976d2; color: #fff; border-color: #1976d2; }
+    #content { max-height: 380px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; background: #fff; }
+    .item { display: block; width: 100%; text-align: left; padding: 6px 8px; border: none; border-left: 5px solid transparent; background: #fff; border-bottom: 1px solid #f0f0f0; cursor: pointer; font-size: 12px; line-height: 1.6; box-sizing: border-box; font-family: inherit; }
+    .item:hover { background: #eef6ff; }
+    .item.selected { background: #b3d9ff; border-left-color: #0066cc; }
+    .item:last-child { border-bottom: none; }
+    .time { color: #1976d2; margin-right: 6px; font-family: Consolas, monospace; font-weight: bold; }
+    .word { border-bottom: 1px dashed transparent; cursor: pointer; }
+    .word:hover { background: #ffe9a8; border-bottom-color: #d4a017; border-radius: 2px; }
+    .word.saved { background: #ffe066; border-bottom-color: #d4a017; font-weight: 600; }
+    #tooltip { position: fixed; background: #222; color: #fff; padding: 6px 10px; border-radius: 6px; font-size: 12px; max-width: 220px; pointer-events: none; display: none; z-index: 9999; box-shadow: 0 2px 8px rgba(0,0,0,0.3); line-height: 1.4; }
+    .wordcard { padding: 10px; border-bottom: 1px solid #eee; position: relative; border-left: 5px solid transparent; }
+    .wordcard.selected { background: #b3d9ff; border-left-color: #0066cc; }
+    .wordcard:last-child { border-bottom: none; }
+    .wordcard h4 { margin: 0 0 4px; font-size: 14px; color: #1976d2; }
+    .wordcard .cn { font-size: 12px; color: #333; margin-bottom: 4px; }
+    .wordcard .ctx { font-size: 11px; color: #555; font-style: italic; margin: 4px 0; cursor: pointer; }
+    .wordcard .ctx:hover { color: #1976d2; text-decoration: underline; }
+    .wordcard .ai { font-size: 11px; color: #444; margin-top: 4px; }
+    .wordcard .remove { font-size: 10px; padding: 2px 6px; position: absolute; top: 8px; right: 8px; cursor: pointer; }
+    .wordcard .video-link { font-size: 10px; color: #1976d2; text-decoration: none; }
+    .wordcard .video-link:hover { text-decoration: underline; }
+    .wordcard .video-link-row { font-size: 10px; color: #999; margin-bottom: 4px; }
+    .mini-btn { font-size: 11px; padding: 3px 8px; margin-top: 6px; cursor: pointer; border-radius: 4px; border: 1px solid #ccc; background: #fff; }
+    .mini-btn.primary { background: #1976d2; color: #fff; border-color: #1976d2; }
+    .ai-block { padding: 10px; font-size: 12px; line-height: 1.5; }
+    .ai-block h4 { margin: 10px 0 4px; font-size: 13px; color: #1976d2; }
+    .ai-block h4:first-child { margin-top: 0; }
+    #kb-export { display: none; padding-top: 10px; margin-top: 8px; border-top: 1px solid #eee; }
+    #kb-export .row { display: flex; gap: 4px; margin-bottom: 6px; }
+    #kb-export .row button { flex: 1; font-size: 11px; padding: 4px 4px; cursor: pointer; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+    #kb-export .row button:hover { background: #eef6ff; }
+    #kb-export label { font-size: 11px; color: #666; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    #save-dialog { padding: 0; }
+    #save-dialog .dlg { padding: 8px; background: #f0f7ff; border: 1px solid #c9dffb; border-radius: 4px; margin-top: 6px; }
+    #save-dialog input { width: 100%; padding: 5px; font-size: 11px; box-sizing: border-box; margin-bottom: 6px; border: 1px solid #ccc; border-radius: 3px; }
+    #save-dialog .btnrow { display: flex; gap: 6px; justify-content: flex-end; }
+    .kb-card { padding: 10px; border-bottom: 1px solid #eee; border-left: 5px solid transparent; }
+    .kb-card.selected { background: #b3d9ff; border-left-color: #0066cc; }
+    .kb-card:last-child { border-bottom: none; }
+    .kb-title { font-size: 13px; font-weight: 600; color: #1976d2; display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; margin-bottom: 4px; }
+    .kb-arrow { font-size: 10px; color: #1976d2; margin-right: 4px; flex-shrink: 0; }
+    .kb-title span { flex: 1; word-break: break-all; }
+    .kb-tags { margin-bottom: 6px; }
+    .kb-tag { display: inline-block; font-size: 10px; padding: 1px 7px; background: #e3f2fd; color: #1976d2; border-radius: 8px; margin: 0 4px 2px 0; }
+    .kb-section { font-size: 11px; margin-bottom: 6px; line-height: 1.5; }
+    .kb-word { display: inline-block; background: #f0f4ff; padding: 1px 5px; border-radius: 3px; margin: 2px 3px 2px 0; }
+    .kb-foot { display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: #999; margin-top: 6px; }
+    .kb-foot a { color: #1976d2; text-decoration: none; }
+    .kb-foot a:hover { text-decoration: underline; }
+    .wordcard.flash { animation: flashHighlight 1.6s ease-out; }
+    @keyframes flashHighlight { 0% { background: #fff7cc; } 100% { background: transparent; } }
+    .source-badge { display: inline-block; font-size: 10px; padding: 1px 7px; border-radius: 8px; margin-left: 6px; font-weight: normal; }
+    .source-badge.cache { background: #e8f5e9; color: #2e7d32; }
+    .source-badge.api { background: #e3f2fd; color: #1565c0; }
+  </style>
+</head>
+<body tabindex="-1" style="outline:none;">
+  <div class="header">
+    <h3>YouTube Learning Helper</h3>
+    <button id="btnApiSettings" title="设置 DeepSeek API Key">⚙️ API</button>
+  </div>
+  <div id="apiSetting">
+    <label>API Key 保存在本地浏览器中，不会上传</label>
+    <input id="apiKey" type="password" placeholder="sk-..." />
+  </div>
+  <div class="toolbar">
+    <button id="btnCheck" class="active">📺 字幕</button>
+    <button id="btnWords">📖 生词</button>
+    <button id="btnAI">🤖 整理</button>
+    <button id="btnKB">📚 知识库</button>
+  </div>
+  <div id="status">点击 📺 字幕 获取当前视频字幕…</div>
+  <div id="kb-filter"></div>
+  <div id="word-filter"></div>
+  <div id="content"></div>
+  <div id="kb-export">
+    <div class="row">
+      <button id="btnExportCurrent" title="导出当前视频的笔记">📤 当前</button>
+      <button id="btnExportTag" title="导出当前标签下的全部笔记">📤 标签</button>
+      <button id="btnExportAll" title="导出知识库全部笔记">📤 全部</button>
+    </div>
+    <label><input type="checkbox" id="includeTranscript"> 包含完整字幕</label>
+  </div>
+  <div id="save-dialog"></div>
+  <div id="tooltip"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

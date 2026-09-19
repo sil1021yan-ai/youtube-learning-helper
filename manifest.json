@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Learning Helper",
+  "version": "0.2",
+  "description": "YouTube English learning and AI summary (personal use)",
+  "permissions": ["activeTab", "tabs", "storage", "sidePanel", "unlimitedStorage"],
+  "host_permissions": ["*://www.youtube.com/*"],
+  "action": {
+    "default_title": "YouTube Learning Helper"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://www.youtube.com/*"],
+      "js": ["page_script.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://www.youtube.com/watch*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
