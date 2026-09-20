@@ -1,7 +1,7 @@
 const state = {
   view: 'subtitles', lines: [], savedWords: {}, videoId: null, aiResult: null,
   knowledgeBase: {}, aiResults: {}, tagFilter: 'ALL', expandedIds: {}, highlightWord: null,
-  selectedIndex: 0, focusMode: 'line', selectedWordIndex: 0, wordFilter: 'current', checkInDates: [], reviewMode: false,
+  selectedIndex: 0, focusMode: 'line', selectedWordIndex: 0, wordFilter: 'current', checkInDates: [], reviewMode: false, reviewCards: [], reviewIndex: 0, reviewFlipped: false, reviewInitialCount: 0, reviewStats: { mastered: 0, again: 0, skipped: 0 },
   aiResultSource: null
 };
 const tooltip = document.getElementById('tooltip');
@@ -298,6 +298,14 @@ function renderWordFilter() {
 
   el.appendChild(makeChip('当前视频 (' + currentCount + ')', 'current'));
   el.appendChild(makeChip('全部 (' + totalCount + ')', 'all'));
+
+  // 右上角：已掌握 / 总数
+  const masteredCount = allWords.filter(w => w.mastered).length;
+  const hint = document.createElement('span');
+  hint.className = 'word-filter-hint';
+  hint.style.marginLeft = 'auto';
+  hint.textContent = '已掌握 ' + masteredCount + ' / ' + totalCount;
+  el.appendChild(hint);
 }
 
 function updateWordSelectionOnly() {
@@ -326,7 +334,7 @@ async function renderWordsAsync() {
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
     const div = document.createElement('div');
-    div.className = 'wordcard' + (i === state.selectedIndex ? ' selected' : '');
+    div.className = 'wordcard' + (i === state.selectedIndex ? ' selected' : '') + (w.mastered ? ' mastered' : '');
     div.dataset.word = w.word;
 
     const removeBtn = document.createElement('button');
@@ -336,6 +344,39 @@ async function renderWordsAsync() {
       delete state.savedWords[w.word];
       await saveSavedWords(); renderWordsAsync(); updateStatus();
     });
+
+    // 未掌握的词：hover 时显示"✓ 已掌握"按钮
+    if (!w.mastered) {
+      const markBtn = document.createElement('button');
+      markBtn.className = 'mark-master-btn';
+      markBtn.textContent = '✓ 已掌握';
+      markBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        w.mastered = true;
+        await saveSavedWords();
+        renderWordsAsync();
+        updateStatus();
+      });
+      div.appendChild(markBtn);
+    }
+
+    // 只有已掌握的词才显示"取消掌握"按钮
+    if (w.mastered) {
+      const masterBtn = document.createElement('button');
+      masterBtn.className = 'mini-btn unmaster';
+      masterBtn.style.marginLeft = '6px';
+      masterBtn.style.marginTop = '0';
+      masterBtn.style.fontSize = '10px';
+      masterBtn.textContent = '↺ 取消掌握';
+      masterBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        w.mastered = false;
+        await saveSavedWords();
+        renderWordsAsync();
+        updateStatus();
+      });
+      div.appendChild(masterBtn);
+    }
 
     const h = document.createElement('h4');
     h.textContent = w.original || w.word;
@@ -840,10 +881,16 @@ function renderStats() {
     : '<div style="font-size:11px;color:#f57c00;margin-top:4px;">⚠️ 今天还没打卡</div>';
   html += '</div>';
 
-  // 右：数据概览
+  // 右：数据概览（含进度条）
+  const masteredCount = allWords.filter(w => w.mastered).length;
+  const masterPct = totalWords === 0 ? 0 : Math.round((masteredCount / totalWords) * 100);
   html += '<div class="stat-card">';
   html += '<h4>📈 数据概览</h4>';
   html += '<div><span class="stat-big">' + totalWords + '</span><span class="stat-label">生词</span></div>';
+  if (totalWords > 0) {
+    html += '<div class="master-progress"><div class="master-fill" style="width:' + masterPct + '%"></div></div>';
+    html += '<div class="master-text"><span class="green">已掌握 ' + masteredCount + '</span><span>' + masterPct + '%</span></div>';
+  }
   html += '<div style="font-size:11px;color:#666;margin-top:4px;">' + Object.keys(state.knowledgeBase).length + ' 个视频</div>';
   html += '</div>';
 
@@ -914,12 +961,134 @@ function renderStats() {
     } else {
       btn.textContent = '🔁 开始复习';
       btn.addEventListener('click', () => {
-        statusEl.textContent = '🔁 复习功能即将上线（下一段开发）';
+        startReview();
       });
     }
     bottomAction.appendChild(btn);
     bottomAction.style.display = 'block';
   }
+}
+
+function startReview() {
+  const allWords = Object.values(state.savedWords).filter(w => !w.mastered);
+  if (allWords.length === 0) {
+    statusEl.textContent = '🎉 没有待复习的词（全部已掌握）';
+    return;
+  }
+  // 按最久没复习排序：没复习过的用 addedAt 兜底
+  const sorted = allWords.slice().sort((a, b) => {
+    const aTime = a.lastReviewedAt || a.addedAt || 0;
+    const bTime = b.lastReviewedAt || b.addedAt || 0;
+    return aTime - bTime;
+  });
+  state.reviewCards = sorted.slice(0, 10);
+  state.reviewInitialCount = state.reviewCards.length;
+  state.reviewIndex = 0;
+  state.reviewFlipped = false;
+  state.reviewStats = { mastered: 0, again: 0, skipped: 0 };
+  state.reviewMode = true;
+  renderReview();
+}
+
+function renderReview() {
+  const bottomAction = document.getElementById('bottom-action');
+  if (bottomAction) { bottomAction.innerHTML = ''; bottomAction.style.display = 'none'; }
+  kbFilterEl.style.display = 'none';
+  const wfHide = document.getElementById('word-filter');
+  if (wfHide) wfHide.style.display = 'none';
+
+  contentEl.innerHTML = '';
+
+  // 复习结束
+  if (state.reviewIndex >= state.reviewCards.length) {
+    renderReviewComplete();
+    return;
+  }
+
+  const card = state.reviewCards[state.reviewIndex];
+  const total = state.reviewCards.length;
+  const idx = state.reviewIndex + 1;
+  const info = card.aiInfo || {};
+  const definition = info.definition || card.googleZh || '（无释义，可稍后 AI 解释）';
+
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'display:flex; flex-direction:column; height:100%; padding:4px 2px; box-sizing:border-box;';
+
+  // 头部进度
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#888; margin-bottom:8px;';
+  header.innerHTML = '<span>🔁 复习中</span><span>' + idx + ' / ' + total + '</span>';
+  wrapper.appendChild(header);
+
+  // 卡片
+  const cardBox = document.createElement('div');
+  cardBox.style.cssText = 'flex:1; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:16px; background:#fafafa; border-radius:8px; text-align:center;';
+
+  let cardHtml = '<div style="font-size:26px; font-weight:700; color:#1976d2; word-break:break-all;">' + escapeHtml(card.original || card.word) + '</div>';
+  if (info.phonetic) cardHtml += '<div style="font-size:13px; color:#666; margin-top:6px;">' + escapeHtml(info.phonetic) + '</div>';
+  if (info.pos) cardHtml += '<div style="font-size:12px; color:#888; margin-top:4px;">' + escapeHtml(info.pos) + '</div>';
+
+  if (state.reviewFlipped) {
+    cardHtml += '<div style="width:60%; border-top:1px solid #ddd; margin:16px 0;"></div>';
+    cardHtml += '<div style="font-size:13px; color:#333; line-height:1.6;">释义：' + escapeHtml(definition) + '</div>';
+    if (info.example) cardHtml += '<div style="font-size:12px; color:#555; margin-top:8px; font-style:italic;">例句：' + escapeHtml(info.example) + '</div>';
+    if (card.sentence) {
+      const shortSent = card.sentence.length > 70 ? card.sentence.slice(0, 70) + '…' : card.sentence;
+      cardHtml += '<div style="font-size:11px; color:#888; margin-top:8px;">原文："' + escapeHtml(shortSent) + '"</div>';
+    }
+    if (card.videoId) {
+      cardHtml += '<div style="margin-top:10px;"><a href="https://www.youtube.com/watch?v=' + card.videoId + '" target="_blank" style="font-size:11px; color:#1976d2; text-decoration:none;">🔗 打开原视频</a></div>';
+    }
+  } else {
+    cardHtml += '<div style="font-size:12px; color:#aaa; margin-top:24px;">[ Space 显示释义 ]</div>';
+  }
+
+  cardBox.innerHTML = cardHtml;
+  wrapper.appendChild(cardBox);
+
+  // 底部提示
+  const hint = document.createElement('div');
+  hint.style.cssText = 'font-size:11px; color:#888; text-align:center; margin-top:10px; line-height:1.6;';
+  hint.innerHTML = state.reviewFlipped
+    ? 'Space 收起 · Enter 已掌握 · ← 再看一遍 · → 跳过 · Esc 退出'
+    : 'Space 翻转 · ← 再看一遍 · → 跳过 · Esc 退出';
+  wrapper.appendChild(hint);
+
+  contentEl.appendChild(wrapper);
+
+  // 更新状态栏
+  statusEl.textContent = state.reviewFlipped
+    ? '🔁 ' + idx + '/' + total + ' · 已翻转 · Enter 已掌握 · ← 再看 · → 跳过'
+    : '🔁 ' + idx + '/' + total + ' · Space 翻转 · Esc 退出';
+}
+
+function renderReviewComplete() {
+  // 打卡
+  markToday();
+  statusEl.textContent = '🎉 复习完成';
+
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'display:flex; flex-direction:column; justify-content:center; align-items:center; height:100%; padding:20px; text-align:center;';
+
+  const streak = calcStreak();
+  let html = '<div style="font-size:40px; margin-bottom:8px;">🎉</div>';
+  html += '<div style="font-size:18px; font-weight:600; color:#1976d2; margin-bottom:16px;">复习完成</div>';
+  const initCount = state.reviewInitialCount || state.reviewCards.length;
+  const newCount = initCount - state.reviewStats.mastered - state.reviewStats.skipped;
+  html += '<div style="font-size:13px; color:#333; line-height:2;">';
+  html += '初始卡片：' + initCount + ' 张<br>';
+  html += '✅ 已掌握：' + state.reviewStats.mastered + ' 张<br>';
+  html += '🔁 再看一遍：' + state.reviewStats.again + ' 次<br>';
+  html += '➡️ 跳过：' + state.reviewStats.skipped + ' 张<br>';
+  html += '⏳ 还没掌握：' + Math.max(0, newCount) + ' 张<br>';
+  html += '</div>';
+  html += '<div style="margin-top:20px; padding:10px 16px; background:#fff7e0; border-radius:8px; font-size:13px; color:#f57c00;">';
+  html += '🔥 连续打卡 <b style="font-size:18px;">' + streak + '</b> 天';
+  html += '</div>';
+  html += '<div style="margin-top:24px; font-size:12px; color:#888;">按 Esc 或 Enter 返回统计</div>';
+
+  wrapper.innerHTML = html;
+  contentEl.appendChild(wrapper);
 }
 
 function updateStatus() {
@@ -938,6 +1107,13 @@ function updateStatus() {
 }
 
 function setView(view) {
+  // 如果从统计视图切走，且正在复习，自动退出复习
+  if (state.reviewMode && view !== 'stats') {
+    state.reviewMode = false;
+    state.reviewFlipped = false;
+    state.reviewCards = [];
+    state.reviewIndex = 0;
+  }
   const prevView = state.view;
   state.view = view;
   if (prevView !== view) {
@@ -1075,7 +1251,102 @@ if (btnApiSettings) {
 // ============ 键盘 ============
 const VIEW_ORDER = ['subtitles', 'words', 'ai', 'knowledge', 'stats'];
 
+async function handleReviewKey(key) {
+  // Tab：退出复习并切视图
+  if (key === 'Tab') {
+    state.reviewMode = false;
+    state.reviewFlipped = false;
+    state.reviewCards = [];
+    state.reviewIndex = 0;
+    await saveSavedWords();
+    const idx = VIEW_ORDER.indexOf('stats');
+    setView(VIEW_ORDER[(idx + 1) % VIEW_ORDER.length]);
+    return;
+  }
+  // 已完成页
+  if (state.reviewIndex >= state.reviewCards.length) {
+    if (key === 'Escape' || key === 'Enter' || key === ' ') {
+      state.reviewMode = false;
+      setView('stats');
+    }
+    return;
+  }
+
+  const card = state.reviewCards[state.reviewIndex];
+  if (!card) { state.reviewMode = false; setView('stats'); return; }
+
+  if (key === ' ') {
+    const wasFlipped = state.reviewFlipped;
+    state.reviewFlipped = !state.reviewFlipped;
+    renderReview();
+    // 只在从"收起 → 展开"时朗读
+    if (!wasFlipped && state.reviewFlipped) {
+      speakWord(card.original || card.word);
+    }
+    return;
+  }
+
+  if (key === 'Escape') {
+    state.reviewMode = false;
+    await saveSavedWords();
+    setView('stats');
+    statusEl.textContent = '⏸ 已退出复习（进度已保存）';
+    return;
+  }
+
+  if (key === 'Enter') {
+    // 已掌握
+    if (state.savedWords[card.word]) {
+      state.savedWords[card.word].mastered = true;
+      state.savedWords[card.word].lastReviewedAt = Date.now();
+    }
+    state.reviewStats.mastered++;
+    await saveSavedWords();
+    state.reviewIndex++;
+    state.reviewFlipped = false;
+    renderReview();
+    return;
+  }
+
+  if (key === 'ArrowLeft') {
+    // 再看一遍：更新 lastReviewedAt，塞回队尾
+    if (state.savedWords[card.word]) {
+      state.savedWords[card.word].lastReviewedAt = Date.now();
+    }
+    state.reviewStats.again++;
+    state.reviewCards.push(card);
+    await saveSavedWords();
+    state.reviewIndex++;
+    state.reviewFlipped = false;
+    renderReview();
+    return;
+  }
+
+  if (key === 'ArrowRight') {
+    // 跳过
+    if (state.savedWords[card.word]) {
+      state.savedWords[card.word].lastReviewedAt = Date.now();
+    }
+    state.reviewStats.skipped++;
+    await saveSavedWords();
+    state.reviewIndex++;
+    state.reviewFlipped = false;
+    renderReview();
+    return;
+  }
+}
+
 function handleKeyPress(key, shiftKey) {
+  // 复习模式优先
+  if (state.reviewMode) {
+    handleReviewKey(key);
+    return;
+  }
+  // 统计视图：Enter 触发复习
+  if (key === 'Enter' && state.view === 'stats') {
+    startReview();
+    return;
+  }
   if (key === 'Tab') { const idx = VIEW_ORDER.indexOf(state.view); setView(VIEW_ORDER[(idx + 1) % VIEW_ORDER.length]); return; }
   if (key === 'p' || key === 'P') {
     chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => { if (tab && tab.id) chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_PLAY' }); });
