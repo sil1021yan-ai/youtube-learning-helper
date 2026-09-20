@@ -100,6 +100,17 @@
 
 ## ⌨️ 键盘映射（EasyInput）
 
+插件配合 EasyInput App 使用，配置方式如下：
+
+<p align="center">
+  <img src="screenshots/05-easyinput.png" width="280" alt="EasyInput App 按键配置" />
+  <img src="screenshots/06-easyinputfunctions.png" width="280" alt="EasyInput App 旋钮与功能配置" />
+</p>
+
+<p align="center">
+  <sub>EasyInput App 里的按键与旋钮映射配置</sub>
+</p>
+
 ### 通用操作
 
 | 硬件 | 发送按键 | 插件行为 |
