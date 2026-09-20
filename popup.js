@@ -1,7 +1,7 @@
 const state = {
   view: 'subtitles', lines: [], savedWords: {}, videoId: null, aiResult: null,
   knowledgeBase: {}, aiResults: {}, tagFilter: 'ALL', expandedIds: {}, highlightWord: null,
-  selectedIndex: 0, focusMode: 'line', selectedWordIndex: 0, wordFilter: 'current', checkInDates: [], reviewMode: false, reviewCards: [], reviewIndex: 0, reviewFlipped: false, reviewInitialCount: 0, reviewStats: { mastered: 0, again: 0, skipped: 0 },
+  selectedIndex: 0, focusMode: 'line', selectedWordIndex: 0, wordFilter: 'current', checkInDates: [], reviewMode: false, reviewCards: [], reviewIndex: 0, reviewFlipped: false, reviewInitialCount: 0, reviewStats: { mastered: 0, again: 0, skipped: 0 }, masteredExpanded: false,
   aiResultSource: null
 };
 const tooltip = document.getElementById('tooltip');
@@ -299,10 +299,13 @@ function applyWordFocus() {
 }
 function getFilteredWords() {
   const all = Object.values(state.savedWords).sort((a, b) => b.addedAt - a.addedAt);
-  if (state.wordFilter === 'current') {
-    return all.filter(w => w.videoId === state.videoId);
-  }
-  return all;
+  const filtered = state.wordFilter === 'current'
+    ? all.filter(w => w.videoId === state.videoId)
+    : all;
+  const unmastered = filtered.filter(w => !w.mastered);
+  const mastered = filtered.filter(w => w.mastered);
+  if (state.masteredExpanded) return unmastered.concat(mastered);
+  return unmastered;
 }
 
 function renderWordFilter() {
@@ -351,139 +354,79 @@ function updateWordSelectionOnly() {
 
 async function renderWordsAsync() {
   contentEl.innerHTML = '';
-  const words = getFilteredWords();
-  if (state.selectedIndex >= words.length) state.selectedIndex = Math.max(0, words.length - 1);
+
+  // 获取筛选后的完整列表（用于分组）
+  const all = Object.values(state.savedWords).sort((a, b) => b.addedAt - a.addedAt);
+  const filtered = state.wordFilter === 'current'
+    ? all.filter(w => w.videoId === state.videoId)
+    : all;
+  const unmastered = filtered.filter(w => !w.mastered);
+  const mastered = filtered.filter(w => w.mastered);
+
+  // 键盘用的扁平数组
+  const keyboardList = state.masteredExpanded
+    ? unmastered.concat(mastered)
+    : unmastered;
+
+  if (state.selectedIndex >= keyboardList.length) {
+    state.selectedIndex = Math.max(0, keyboardList.length - 1);
+  }
+
   renderWordFilter();
 
-  if (words.length === 0) {
+  // 空状态
+  if (filtered.length === 0) {
     const msg = state.wordFilter === 'current'
-      ? '当前视频还没有标记生词。在 字幕 里点击单词加入，或切到「全部」查看历史。'
-      : '生词本是空的。在 字幕 里点击单词即可加入。';
+      ? '当前视频还没有标记单词。在 字幕 里点击单词加入，或切到「全部」查看历史。'
+      : '单词本是空的。在 字幕 里点击单词即可加入。';
     contentEl.innerHTML = '<div class="ai-block">' + msg + '</div>';
     return;
   }
 
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i];
-    const div = document.createElement('div');
-    div.className = 'wordcard' + (i === state.selectedIndex ? ' selected' : '') + (w.mastered ? ' mastered' : '');
-    div.dataset.word = w.word;
+  let cardIndex = 0;
 
-    const removeBtn = document.createElement('button');
-    removeBtn.className = 'remove';
-    removeBtn.textContent = '移除';
-    removeBtn.addEventListener('click', async () => {
-      delete state.savedWords[w.word];
-      await saveSavedWords(); renderWordsAsync(); updateStatus();
-    });
-
-    // 未掌握的词：hover 时显示"✓ 已掌握"按钮
-    if (!w.mastered) {
-      const markBtn = document.createElement('button');
-      markBtn.className = 'mark-master-btn';
-      markBtn.textContent = '✓ 已掌握';
-      markBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        w.mastered = true;
-        await saveSavedWords();
-        renderWordsAsync();
-        updateStatus();
-      });
-      div.appendChild(markBtn);
-    }
-
-    // 只有已掌握的词才显示"取消掌握"按钮
-    if (w.mastered) {
-      const masterBtn = document.createElement('button');
-      masterBtn.className = 'mini-btn unmaster';
-      masterBtn.style.marginLeft = '6px';
-      masterBtn.style.marginTop = '0';
-      masterBtn.style.fontSize = '10px';
-      masterBtn.textContent = '↺ 取消掌握';
-      masterBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        w.mastered = false;
-        await saveSavedWords();
-        renderWordsAsync();
-        updateStatus();
-      });
-      div.appendChild(masterBtn);
-    }
-
-    const h = document.createElement('h4');
-    h.textContent = w.original || w.word;
-    const speakBtn = document.createElement('button');
-    speakBtn.className = 'mini-btn';
-    speakBtn.style.marginLeft = '6px';
-    speakBtn.style.marginTop = '0';
-    speakBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
-    speakBtn.title = '朗读单词';
-    speakBtn.addEventListener('click', (e) => { e.stopPropagation(); speakWord(w.original || w.word); });
-    h.appendChild(speakBtn);
-
-    div.appendChild(removeBtn);
-    div.appendChild(h);
-
-    const cn = document.createElement('div'); cn.className = 'cn';
-    cn.textContent = '中文：加载中…';
-    div.appendChild(cn);
-    (async () => {
-      const t = await translateWord(w.original || w.word);
-      cn.textContent = '中文：' + t;
-      if (state.savedWords[w.word] && !state.savedWords[w.word].googleZh) {
-        state.savedWords[w.word].googleZh = t;
-        await saveSavedWords();
-      }
-    })();
-
-    const ctx = document.createElement('div'); ctx.className = 'ctx';
-    ctx.textContent = formatTime(w.startMs) + '  "' + (w.sentence || '').slice(0, 70) + '..."';
-    ctx.title = '点击跳转到视频对应位置';
-    ctx.addEventListener('click', () => {
-      chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-        if (tab && tab.id) chrome.tabs.sendMessage(tab.id, { type: 'SEEK_TO', timeMs: w.startMs });
-      });
-    });
-    div.appendChild(ctx);
-
-    if (w.videoId) {
-      const linkRow = document.createElement('div');
-      linkRow.className = 'video-link-row';
-      const a = document.createElement('a');
-      a.className = 'video-link';
-      a.href = 'https://www.youtube.com/watch?v=' + w.videoId;
-      a.target = '_blank';
-      a.textContent = '打开视频';
-      linkRow.appendChild(a);
-      div.appendChild(linkRow);
-    }
-
-    const aiArea = document.createElement('div'); aiArea.className = 'ai-area';
-    div.appendChild(aiArea);
-
-    const renderAIInfo = () => {
-      aiArea.innerHTML = '';
-      if (w.aiInfo) {
-        if (w.aiInfo.phonetic || w.aiInfo.pos) {
-          const p = document.createElement('div'); p.className = 'ai';
-          p.textContent = [w.aiInfo.phonetic, w.aiInfo.pos].filter(Boolean).join('  ');
-          aiArea.appendChild(p);
-        }
-        if (w.aiInfo.definition) { const d = document.createElement('div'); d.className = 'ai'; d.textContent = '释义：' + w.aiInfo.definition; aiArea.appendChild(d); }
-        if (w.aiInfo.example) { const ex = document.createElement('div'); ex.className = 'ai'; ex.textContent = '例句：' + w.aiInfo.example; aiArea.appendChild(ex); }
-        const redo = document.createElement('button'); redo.className = 'mini-btn'; redo.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px;"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>重新解释';
-        redo.addEventListener('click', () => explainOne(w, renderAIInfo));
-        aiArea.appendChild(redo);
-      } else {
-        const btn = document.createElement('button'); btn.className = 'mini-btn primary'; btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><path d="M12 2l1.5 4.5L18 8l-4.5 1.5L12 14l-1.5-4.5L6 8l4.5-1.5z"/></svg>AI 解释';
-        btn.addEventListener('click', () => explainOne(w, renderAIInfo));
-        aiArea.appendChild(btn);
-      }
-    };
-    renderAIInfo();
+  // 渲染未掌握
+  for (let i = 0; i < unmastered.length; i++) {
+    const w = unmastered[i];
+    const div = renderWordCard(w, cardIndex);
+    cardIndex++;
     contentEl.appendChild(div);
   }
 
+  // 如果全部都是已掌握，给个提示
+  if (unmastered.length === 0 && mastered.length > 0 && !state.masteredExpanded) {
+    const hint = document.createElement('div');
+    hint.className = 'ai-block';
+    hint.style.textAlign = 'center';
+    hint.style.color = '#999';
+    hint.textContent = '这个筛选下没有未掌握的单词';
+    contentEl.appendChild(hint);
+  }
+
+  // 已掌握分组（有才显示）
+  if (mastered.length > 0) {
+    const toggle = document.createElement('div');
+    toggle.className = 'mastered-toggle';
+    const arrow = state.masteredExpanded ? '▼' : '▶';
+    toggle.innerHTML = '<span class="mt-arrow">' + arrow + '</span>已掌握 (' + mastered.length + ')';
+    toggle.addEventListener('click', () => {
+      state.masteredExpanded = !state.masteredExpanded;
+      state.selectedIndex = 0;
+      renderWordsAsync();
+    });
+    contentEl.appendChild(toggle);
+
+    if (state.masteredExpanded) {
+      for (let i = 0; i < mastered.length; i++) {
+        const w = mastered[i];
+        const div = renderWordCard(w, cardIndex);
+        cardIndex++;
+        contentEl.appendChild(div);
+      }
+    }
+  }
+
+  // highlightWord（从知识库跳转过来时）
   if (state.highlightWord) {
     const target = contentEl.querySelector('.wordcard[data-word="' + state.highlightWord + '"]');
     if (target) {
@@ -495,6 +438,130 @@ async function renderWordsAsync() {
     }
     state.highlightWord = null;
   }
+}
+
+// 渲染单张单词卡（抽出来复用）
+function renderWordCard(w, i) {
+  const div = document.createElement('div');
+  div.className = 'wordcard' + (i === state.selectedIndex ? ' selected' : '') + (w.mastered ? ' mastered' : '');
+  div.dataset.word = w.word;
+
+  // 未掌握的词：hover 时显示"✓ 已掌握"按钮
+  if (!w.mastered) {
+    const markBtn = document.createElement('button');
+    markBtn.className = 'mark-master-btn';
+    markBtn.textContent = '✓ 已掌握';
+    markBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      w.mastered = true;
+      await saveSavedWords();
+      renderWordsAsync();
+      updateStatus();
+    });
+    div.appendChild(markBtn);
+  }
+
+  // 已掌握的词：显示"取消掌握"按钮
+  if (w.mastered) {
+    const unmasterBtn = document.createElement('button');
+    unmasterBtn.className = 'mini-btn unmaster';
+    unmasterBtn.style.marginLeft = '6px';
+    unmasterBtn.style.marginTop = '0';
+    unmasterBtn.style.fontSize = '10px';
+    unmasterBtn.textContent = '↺ 取消掌握';
+    unmasterBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      w.mastered = false;
+      await saveSavedWords();
+      renderWordsAsync();
+      updateStatus();
+    });
+    div.appendChild(unmasterBtn);
+  }
+
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 'remove';
+  removeBtn.textContent = '移除';
+  removeBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    delete state.savedWords[w.word];
+    await saveSavedWords();
+    renderWordsAsync();
+    updateStatus();
+  });
+  div.appendChild(removeBtn);
+
+  const h = document.createElement('h4');
+  h.textContent = w.original || w.word;
+  const speakBtn = document.createElement('button');
+  speakBtn.className = 'mini-btn';
+  speakBtn.style.marginLeft = '6px';
+  speakBtn.style.marginTop = '0';
+  speakBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
+  speakBtn.title = '朗读单词';
+  speakBtn.addEventListener('click', (e) => { e.stopPropagation(); speakWord(w.original || w.word); });
+  h.appendChild(speakBtn);
+  div.appendChild(h);
+
+  const cn = document.createElement('div'); cn.className = 'cn';
+  cn.textContent = '中文：加载中…';
+  div.appendChild(cn);
+  (async () => {
+    const t = await translateWord(w.original || w.word);
+    cn.textContent = '中文：' + t;
+    if (state.savedWords[w.word] && !state.savedWords[w.word].googleZh) {
+      state.savedWords[w.word].googleZh = t;
+      await saveSavedWords();
+    }
+  })();
+
+  const ctx = document.createElement('div'); ctx.className = 'ctx';
+  ctx.textContent = formatTime(w.startMs) + '  "' + (w.sentence || '').slice(0, 70) + '..."';
+  ctx.title = '点击跳转到视频对应位置';
+  ctx.addEventListener('click', () => {
+    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+      if (tab && tab.id) chrome.tabs.sendMessage(tab.id, { type: 'SEEK_TO', timeMs: w.startMs });
+    });
+  });
+  div.appendChild(ctx);
+
+  if (w.videoId) {
+    const linkRow = document.createElement('div');
+    linkRow.className = 'video-link-row';
+    const a = document.createElement('a');
+    a.className = 'video-link';
+    a.href = 'https://www.youtube.com/watch?v=' + w.videoId;
+    a.target = '_blank';
+    a.textContent = '打开视频';
+    linkRow.appendChild(a);
+    div.appendChild(linkRow);
+  }
+
+  const aiArea = document.createElement('div'); aiArea.className = 'ai-area';
+  div.appendChild(aiArea);
+
+  const renderAIInfo = () => {
+    aiArea.innerHTML = '';
+    if (w.aiInfo) {
+      if (w.aiInfo.phonetic || w.aiInfo.pos) {
+        const p = document.createElement('div'); p.className = 'ai';
+        p.textContent = [w.aiInfo.phonetic, w.aiInfo.pos].filter(Boolean).join('  ');
+        aiArea.appendChild(p);
+      }
+      if (w.aiInfo.definition) { const d = document.createElement('div'); d.className = 'ai'; d.textContent = '释义：' + w.aiInfo.definition; aiArea.appendChild(d); }
+      if (w.aiInfo.example) { const ex = document.createElement('div'); ex.className = 'ai'; ex.textContent = '例句：' + w.aiInfo.example; aiArea.appendChild(ex); }
+      const redo = document.createElement('button'); redo.className = 'mini-btn'; redo.innerHTML = '重新解释';
+      redo.addEventListener('click', () => explainOne(w, renderAIInfo));
+      aiArea.appendChild(redo);
+    } else {
+      const btn = document.createElement('button'); btn.className = 'mini-btn primary'; btn.innerHTML = 'AI 解释';
+      btn.addEventListener('click', () => explainOne(w, renderAIInfo));
+      aiArea.appendChild(btn);
+    }
+  };
+  renderAIInfo();
+
+  return div;
 }
 
 async function explainOne(w, refresh) {
@@ -736,7 +803,7 @@ function buildKbCard(entry, idx) {
     card.appendChild(sumPreview);
     const stats = document.createElement('div'); stats.className = 'kb-section'; stats.style.color = '#888';
     const tkCount = (entry.takeaways && entry.takeaways.length) || 0;
-    stats.textContent = '' + tkCount + ' 个知识点   ' + videoWords.length + ' 个生词';
+    stats.textContent = '' + tkCount + ' 个知识点   ' + videoWords.length + ' 个单词';
     card.appendChild(stats);
     const foot = document.createElement('div'); foot.className = 'kb-foot';
     const link = document.createElement('a'); link.href = entry.url; link.target = '_blank'; link.textContent = '打开视频';
@@ -756,19 +823,19 @@ function buildKbCard(entry, idx) {
       tkHtml += '</ul>'; tk.innerHTML = tkHtml; card.appendChild(tk);
     }
     const wd = document.createElement('div'); wd.className = 'kb-section';
-    wd.innerHTML = '<b><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>生词 (' + videoWords.length + ')</b><div style="margin-top:4px;"></div>';
+    wd.innerHTML = '<b><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>单词集 (' + videoWords.length + ')</b><div style="margin-top:4px;"></div>';
     card.appendChild(wd);
     const wordContainer = wd.querySelector('div');
     if (videoWords.length === 0) {
       const empty = document.createElement('div'); empty.style.fontSize = '11px'; empty.style.color = '#999';
-      empty.textContent = '这个视频还没有标记生词。';
+      empty.textContent = '这个视频还没有标记单词。';
       wordContainer.appendChild(empty);
     } else {
       videoWords.forEach(w => {
         const span = document.createElement('span');
         span.className = 'kb-word'; span.style.cursor = 'pointer';
         span.textContent = (w.original || w.word) + ' / 加载中…';
-        span.title = '点击跳到生词本查看详情';
+        span.title = '点击跳到单词本查看详情';
         span.addEventListener('click', (e) => { e.stopPropagation(); jumpToWordCard(w.word); });
         wordContainer.appendChild(span);
         (async () => { const t = await translateWord(w.original || w.word); span.textContent = (w.original || w.word) + ' / ' + t; })();
@@ -821,7 +888,7 @@ function generateVideoMarkdown(entry, includeTranscript) {
   }
   const words = getWordsForVideo(entry.videoId);
   if (words.length) {
-    lines.push('## 生词本 (' + words.length + ')');
+    lines.push('## 单词本 (' + words.length + ')');
     lines.push('');
     lines.push('| 单词 | 音标 | 词性 | 释义 | 例句 |');
     lines.push('|------|------|------|------|------|');
@@ -919,7 +986,7 @@ function renderStats() {
   const masterPct = totalWords === 0 ? 0 : Math.round((masteredCount / totalWords) * 100);
   html += '<div class="stat-card">';
   html += '<h4><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>数据概览</h4>';
-  html += '<div><span class="stat-big">' + totalWords + '</span><span class="stat-label">生词</span></div>';
+  html += '<div><span class="stat-big">' + totalWords + '</span><span class="stat-label">单词</span></div>';
   if (totalWords > 0) {
     html += '<div class="master-progress"><div class="master-fill" style="width:' + masterPct + '%"></div></div>';
     html += '<div class="master-text"><span class="green">已掌握 ' + masteredCount + '</span><span>' + masterPct + '%</span></div>';
@@ -961,7 +1028,7 @@ function renderStats() {
   html += '<div class="stat-card">';
   html += '<h4><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>Top 5 视频</h4>';
   if (top5.length === 0) {
-    html += '<div style="font-size:11px;color:#888;">还没有标记生词</div>';
+    html += '<div style="font-size:11px;color:#888;">还没有标记单词</div>';
   } else {
     top5.forEach((pair, i) => {
       const vid = pair[0];
@@ -990,7 +1057,7 @@ function renderStats() {
     btn.id = 'btnStartReview';
     if (totalWords === 0) {
       btn.disabled = true;
-      btn.textContent = '先去标记生词';
+      btn.textContent = '先去标记单词';
     } else {
       btn.textContent = '开始复习';
       btn.addEventListener('click', () => {
@@ -1147,7 +1214,7 @@ function updateStatus() {
   if (state.view === 'subtitles') statusEl.textContent = '共 ' + state.lines.length + ' 行。' + (state.focusMode === 'word' ? '词模式：Space 标记，Esc 退出' : '行模式：Space 跳转，→ 选词');
   else if (state.view === 'words') {
     const filtered = getFilteredWords().length;
-    statusEl.textContent = '生词本（' + (state.wordFilter === 'current' ? '当前视频' : '全部') + '）：' + filtered + ' 个。Enter=AI解释，Space=跳转+朗读';
+    statusEl.textContent = '单词本（' + (state.wordFilter === 'current' ? '当前视频' : '全部') + '）：' + filtered + ' 个。Enter=AI解释，Space=跳转+朗读';
   }
   else if (state.view === 'ai') statusEl.textContent = 'Enter=生成/重新生成，S=保存，Space=翻页';
   else if (state.view === 'knowledge') {
@@ -1461,7 +1528,7 @@ function handleKeyPress(key, shiftKey) {
     return;
   }
   if (key === 'ArrowLeft' || key === 'ArrowRight') {
-    // 生词本：左右切换筛选
+    // 单词本：左右切换筛选
     if (state.view === 'words') {
       state.wordFilter = state.wordFilter === 'current' ? 'all' : 'current';
       state.selectedIndex = 0;
@@ -1602,7 +1669,7 @@ async function pollCurrentVideo() {
 setInterval(pollCurrentVideo, 1500);
 
 async function autoBackfillCheckIn() {
-  // 检查生词本里是否有今天标记的词，有的话补打卡
+  // 检查单词本里是否有今天标记的词，有的话补打卡
   const today = formatDate(new Date());
   const hasTodayWord = Object.values(state.savedWords).some(w => 
     w.addedAt && formatDate(new Date(w.addedAt)) === today
