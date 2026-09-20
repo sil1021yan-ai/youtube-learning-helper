@@ -6,6 +6,21 @@
 
 ---
 
+## 📸 预览
+
+<p align="center">
+  <img src="screenshots/01-subtitles.png" width="200" alt="字幕" />
+  <img src="screenshots/02-words.png" width="200" alt="单词本" />
+  <img src="screenshots/03-review.png" width="200" alt="复习模式" />
+  <img src="screenshots/04-stats.png" width="200" alt="统计视图" />
+</p>
+
+<p align="center">
+  <sub>字幕 · 单词本 · 复习模式 · 统计视图</sub>
+</p>
+
+---
+
 ## 💡 设计理念
 
 **已掌握的词默认折叠，让你专注在不会的词上。**
