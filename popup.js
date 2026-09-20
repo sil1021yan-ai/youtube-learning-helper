@@ -63,6 +63,24 @@ function showTooltip(text, x, y) {
 }
 function hideTooltip() { tooltip.style.display = 'none'; }
 
+function showTooltipForElement(text, el) {
+  if (!el) return;
+  tooltip.textContent = text;
+  tooltip.style.display = 'block';
+  const rect = el.getBoundingClientRect();
+  const tipRect = tooltip.getBoundingClientRect();
+  let left = rect.left + rect.width / 2 - tipRect.width / 2;
+  left = Math.max(8, Math.min(left, window.innerWidth - tipRect.width - 8));
+  let top;
+  if (rect.bottom + tipRect.height + 8 < window.innerHeight) {
+    top = rect.bottom + 8;
+  } else {
+    top = rect.top - tipRect.height - 8;
+  }
+  tooltip.style.left = left + 'px';
+  tooltip.style.top = top + 'px';
+}
+
 function speakWord(word) {
   if (!word) return;
   try {
@@ -161,6 +179,7 @@ function renderSubtitles() {
   applyWordFocus();
 }
 
+let wordTooltipTimer = null;
 function applyWordFocus() {
   contentEl.querySelectorAll('.word').forEach(el => {
     el.classList.remove('focused');
@@ -169,7 +188,11 @@ function applyWordFocus() {
     el.style.outlineOffset = '';
     el.style.borderRadius = '';
   });
-  if (state.focusMode !== 'word') return;
+  if (state.focusMode !== 'word') {
+    if (wordTooltipTimer) { clearTimeout(wordTooltipTimer); wordTooltipTimer = null; }
+    hideTooltip();
+    return;
+  }
   const btn = contentEl.querySelector('.item[data-line-index="' + state.selectedIndex + '"]');
   if (!btn) return;
   const words = btn.querySelectorAll('.word');
@@ -180,6 +203,24 @@ function applyWordFocus() {
     target.style.outline = '2px solid #0066cc';
     target.style.outlineOffset = '1px';
     target.style.borderRadius = '3px';
+
+    // 延迟 300ms 显示翻译气泡（跟随选中词）
+    const wordText = target.textContent;
+    if (wordTooltipTimer) clearTimeout(wordTooltipTimer);
+    hideTooltip();
+    wordTooltipTimer = setTimeout(async () => {
+      const cached = translationCache[wordText.toLowerCase()];
+      if (cached && cached !== '...') {
+        showTooltipForElement(wordText + '：' + cached, target);
+      } else {
+        showTooltipForElement(wordText + '：翻译中…', target);
+        const r = await translateWord(wordText);
+        // 再次确认焦点还在同一个词上
+        if (target.classList.contains('focused')) {
+          showTooltipForElement(wordText + '：' + r, target);
+        }
+      }
+    }, 300);
   }
 }
 function getFilteredWords() {
@@ -729,7 +770,7 @@ async function copyToClipboard(text) {
   }
 }
 function updateStatus() {
-  if (state.view === 'subtitles') statusEl.textContent = '✅ 共 ' + state.lines.length + ' 行。' + (state.focusMode === 'word' ? '左右选词，Space 标记' : '上下选行，Enter 跳转');
+  if (state.view === 'subtitles') statusEl.textContent = '✅ 共 ' + state.lines.length + ' 行。' + (state.focusMode === 'word' ? '词模式：Space 标记，Esc 退出' : '行模式：Space 跳转，→ 选词');
   else if (state.view === 'words') {
     const filtered = getFilteredWords().length;
     statusEl.textContent = '📖 生词本（' + (state.wordFilter === 'current' ? '当前视频' : '全部') + '）：' + filtered + ' 个。Enter=AI解释，Space=跳转+朗读';
@@ -907,7 +948,7 @@ function handleKeyPress(key, shiftKey) {
     if (state.view === 'subtitles') {
       if (state.lines.length === 0) { statusEl.textContent = '⚠️ 请先点 📺 字幕'; return; }
       state.selectedIndex = Math.max(0, Math.min(state.lines.length - 1, state.selectedIndex + delta));
-      state.selectedWordIndex = 0; state.focusMode = 'word';
+      state.selectedWordIndex = 0; state.focusMode = 'line';
       renderSubtitles(); updateStatus();
       const btn = contentEl.querySelector('.item[data-line-index="' + state.selectedIndex + '"]');
       if (btn) scrollToCenter(btn);
@@ -947,13 +988,19 @@ function handleKeyPress(key, shiftKey) {
     }
     // 字幕：左右选词
     if (state.view !== 'subtitles') return;
+    const wasLineMode = state.focusMode !== 'word';
     state.focusMode = 'word';
-    const delta = key === 'ArrowRight' ? 1 : -1;
     const btn = contentEl.querySelector('.item[data-line-index="' + state.selectedIndex + '"]');
     if (!btn) return;
     const words = btn.querySelectorAll('.word');
     if (words.length === 0) return;
-    state.selectedWordIndex = Math.max(0, Math.min(words.length - 1, state.selectedWordIndex + delta));
+    if (wasLineMode) {
+      // 从行模式刚进入词模式：按 → 选第一个词，按 ← 选最后一个词
+      state.selectedWordIndex = (key === 'ArrowRight') ? 0 : words.length - 1;
+    } else {
+      const delta = key === 'ArrowRight' ? 1 : -1;
+      state.selectedWordIndex = Math.max(0, Math.min(words.length - 1, state.selectedWordIndex + delta));
+    }
     applyWordFocus();
     statusEl.textContent = '🔤 词模式：' + (state.selectedWordIndex + 1) + '/' + words.length;
     return;
@@ -1002,7 +1049,16 @@ function handleKeyPress(key, shiftKey) {
           renderSubtitles();
           statusEl.textContent = state.savedWords[wKey] ? '⭐ 已加入：' + tok : '已移除：' + tok;
         });
-      } else statusEl.textContent = '💡 先按 ← → 进入词模式';
+      } else {
+        // 行模式：跳转到当前行
+        const line = state.lines[state.selectedIndex];
+        if (line) {
+          chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+            if (tab && tab.id) chrome.tabs.sendMessage(tab.id, { type: 'SEEK_TO', timeMs: line.start });
+          });
+          statusEl.textContent = '⏸ 已跳到 ' + formatTime(line.start);
+        }
+      }
     } else if (state.view === 'words') {
       const words = getFilteredWords();
       const w = words[state.selectedIndex];

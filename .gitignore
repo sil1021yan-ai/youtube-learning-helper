@@ -1,4 +1,19 @@
-﻿*.zip
+# 扩展代码忽略规则
+*.zip
 *.log
 node_modules/
 .DS_Store
+
+# 排除无关的媒体文件
+*.mp4
+*.mov
+*.avi
+video-cover-*.png
+
+# 排除 AI 工具下载的文件
+doc-fetch-resources/
+AI对话*
+
+# 排除乱码文件名
+202201_*
+*[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*
