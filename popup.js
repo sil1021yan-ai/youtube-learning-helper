@@ -1,7 +1,7 @@
 const state = {
   view: 'subtitles', lines: [], savedWords: {}, videoId: null, aiResult: null,
   knowledgeBase: {}, aiResults: {}, tagFilter: 'ALL', expandedIds: {}, highlightWord: null,
-  selectedIndex: 0, focusMode: 'line', selectedWordIndex: 0, wordFilter: 'current',
+  selectedIndex: 0, focusMode: 'line', selectedWordIndex: 0, wordFilter: 'current', checkInDates: [], reviewMode: false,
   aiResultSource: null
 };
 const tooltip = document.getElementById('tooltip');
@@ -14,15 +14,56 @@ let hoverTimer = null;
 const translationCache = {};
 
 async function loadStorage() {
-  const data = await chrome.storage.local.get(['savedWords', 'apiKey', 'knowledgeBase', 'aiResults']);
+  const data = await chrome.storage.local.get(['savedWords', 'apiKey', 'knowledgeBase', 'aiResults', 'checkInDates']);
   state.savedWords = data.savedWords || {};
   state.knowledgeBase = data.knowledgeBase || {};
   state.aiResults = data.aiResults || {};
+  state.checkInDates = data.checkInDates || [];
   if (data.apiKey) apiKeyInput.value = data.apiKey;
 }
 async function saveSavedWords() { await chrome.storage.local.set({ savedWords: state.savedWords }); }
 async function saveKnowledgeBase() { await chrome.storage.local.set({ knowledgeBase: state.knowledgeBase }); }
 async function saveAiResults() { await chrome.storage.local.set({ aiResults: state.aiResults }); }
+
+async function saveCheckInDates() { await chrome.storage.local.set({ checkInDates: state.checkInDates }); }
+
+function formatDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return y + '-' + m + '-' + day;
+}
+
+function getDateNDaysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d;
+}
+
+async function markToday() {
+  const today = formatDate(new Date());
+  if (state.checkInDates.includes(today)) return;
+  state.checkInDates.push(today);
+  // 只保留最近 365 天
+  const cutoff = formatDate(getDateNDaysAgo(365));
+  state.checkInDates = state.checkInDates.filter(d => d >= cutoff);
+  await saveCheckInDates();
+}
+
+function calcStreak() {
+  const dates = state.checkInDates;
+  let streak = 0;
+  for (let i = 0; i < 365; i++) {
+    const d = formatDate(getDateNDaysAgo(i));
+    if (dates.includes(d)) streak++;
+    else {
+      // 如果今天没打卡但昨天打了，仍然算连续
+      if (i === 0) continue;
+      break;
+    }
+  }
+  return streak;
+}
 
 function formatTime(ms) {
   const total = Math.floor(ms / 1000);
@@ -107,6 +148,7 @@ async function toggleWordSaved(key, original, line) {
   }
   state.aiResult = null;
   await saveSavedWords();
+  await markToday();
 }
 
 function buildWordSpans(text, line, lineIndex) {
@@ -541,6 +583,7 @@ async function callAI(force) {
     state.aiResultSource = 'api';
     state.aiResults[videoId] = parsed;
     await saveAiResults();
+    await markToday();
     renderAIResult(parsed);
     statusEl.textContent = '✅ 摘要和知识点已生成（已缓存）';
   } catch (e) {
@@ -769,6 +812,116 @@ async function copyToClipboard(text) {
     } catch (e2) { return false; }
   }
 }
+function renderStats() {
+  contentEl.innerHTML = '';
+  saveDialogEl.innerHTML = '';
+  kbFilterEl.style.display = 'none';
+  const wfHide = document.getElementById('word-filter');
+  if (wfHide) wfHide.style.display = 'none';
+
+  const allWords = Object.values(state.savedWords);
+  const totalWords = allWords.length;
+  const streak = calcStreak();
+  const today = formatDate(new Date());
+  const checkedToday = state.checkInDates.includes(today);
+
+  const wrapper = document.createElement('div');
+  let html = '';
+
+  // 第一排：连续打卡 + 数据概览（左右并排）
+  html += '<div class="stat-row">';
+
+  // 左：连续打卡
+  html += '<div class="stat-card">';
+  html += '<h4>🔥 连续打卡</h4>';
+  html += '<div class="streak-row"><span class="num">' + streak + '</span><span class="unit">天</span></div>';
+  html += checkedToday
+    ? '<div style="font-size:11px;color:#4caf50;margin-top:4px;">✅ 今天已打卡</div>'
+    : '<div style="font-size:11px;color:#f57c00;margin-top:4px;">⚠️ 今天还没打卡</div>';
+  html += '</div>';
+
+  // 右：数据概览
+  html += '<div class="stat-card">';
+  html += '<h4>📈 数据概览</h4>';
+  html += '<div><span class="stat-big">' + totalWords + '</span><span class="stat-label">生词</span></div>';
+  html += '<div style="font-size:11px;color:#666;margin-top:4px;">' + Object.keys(state.knowledgeBase).length + ' 个视频</div>';
+  html += '</div>';
+
+  html += '</div>'; // end stat-row
+
+  // 最近 7 天新增（从新到旧）
+  const last7 = [];
+  for (let i = 0; i <= 6; i++) {
+    const d = getDateNDaysAgo(i);
+    const dateStr = formatDate(d);
+    const count = allWords.filter(w => w.addedAt && formatDate(new Date(w.addedAt)) === dateStr).length;
+    last7.push({ date: dateStr, count: count });
+  }
+  const maxCount = Math.max(1, ...last7.map(x => x.count));
+  html += '<div class="stat-card">';
+  html += '<h4>📅 最近 7 天新增</h4>';
+  last7.forEach(item => {
+    const displayDate = item.date.slice(5);
+    const pct = (item.count / maxCount) * 100;
+    html += '<div class="bar-row">';
+    html += '<span class="bar-date">' + displayDate + '</span>';
+    html += '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div>';
+    html += '<span class="bar-count">' + item.count + '</span>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // Top 5 视频
+  const byVideo = {};
+  allWords.forEach(w => {
+    if (!w.videoId) return;
+    byVideo[w.videoId] = (byVideo[w.videoId] || 0) + 1;
+  });
+  const top5 = Object.entries(byVideo).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  html += '<div class="stat-card">';
+  html += '<h4>🏆 Top 5 视频</h4>';
+  if (top5.length === 0) {
+    html += '<div style="font-size:11px;color:#888;">还没有标记生词</div>';
+  } else {
+    top5.forEach((pair, i) => {
+      const vid = pair[0];
+      const count = pair[1];
+      const kb = state.knowledgeBase[vid];
+      const title = kb ? kb.title : ('视频 ' + vid);
+      const shortTitle = title.length > 30 ? title.slice(0, 30) + '…' : title;
+      html += '<div class="top-video">';
+      html += '<span class="rank">' + (i + 1) + '.</span>';
+      html += '<span class="title" title="' + escapeHtml(title) + '">' + escapeHtml(shortTitle) + '</span>';
+      html += '<span class="count">' + count + ' 词</span>';
+      html += '</div>';
+    });
+  }
+  html += '</div>';
+
+  wrapper.innerHTML = html;
+  contentEl.appendChild(wrapper);
+
+  // 复习按钮渲染到底部固定区域
+  const bottomAction = document.getElementById('bottom-action');
+  if (bottomAction) {
+    bottomAction.innerHTML = '';
+    const btn = document.createElement('button');
+    btn.className = 'review-btn';
+    btn.id = 'btnStartReview';
+    if (totalWords === 0) {
+      btn.disabled = true;
+      btn.textContent = '🔁 先去标记生词';
+    } else {
+      btn.textContent = '🔁 开始复习';
+      btn.addEventListener('click', () => {
+        statusEl.textContent = '🔁 复习功能即将上线（下一段开发）';
+      });
+    }
+    bottomAction.appendChild(btn);
+    bottomAction.style.display = 'block';
+  }
+}
+
 function updateStatus() {
   if (state.view === 'subtitles') statusEl.textContent = '✅ 共 ' + state.lines.length + ' 行。' + (state.focusMode === 'word' ? '词模式：Space 标记，Esc 退出' : '行模式：Space 跳转，→ 选词');
   else if (state.view === 'words') {
@@ -781,6 +934,7 @@ function updateStatus() {
     const filtered = state.tagFilter === 'ALL' ? total : Object.values(state.knowledgeBase).filter(e => e.tags && e.tags.includes(state.tagFilter)).length;
     statusEl.textContent = state.tagFilter === 'ALL' ? '📚 知识库共 ' + total + ' 条。Enter=展开/收起，Space=翻页' : '📚 标签「' + state.tagFilter + '」下共 ' + filtered + ' 条';
   }
+  else if (state.view === 'stats') statusEl.textContent = '📊 学习统计。Tab 切换视图';
 }
 
 function setView(view) {
@@ -796,6 +950,8 @@ function setView(view) {
   if (view !== 'knowledge') kbFilterEl.style.display = 'none';
   const wf = document.getElementById('word-filter');
   if (wf && view !== 'words') wf.style.display = 'none';
+  const ba = document.getElementById('bottom-action');
+  if (ba && view !== 'stats') { ba.style.display = 'none'; ba.innerHTML = ''; }
   const kbExportEl = document.getElementById('kb-export');
   if (kbExportEl) kbExportEl.style.display = (view === 'knowledge') ? 'block' : 'none';
 
@@ -812,6 +968,9 @@ function setView(view) {
   } else if (view === 'knowledge') {
     document.getElementById('btnKB').classList.add('active');
     renderKnowledgeBase();
+  } else if (view === 'stats') {
+    document.getElementById('btnStats').classList.add('active');
+    renderStats();
   }
   updateStatus();
 }
@@ -867,6 +1026,7 @@ document.getElementById('btnCheck').addEventListener('click', autoFetchSubtitles
 document.getElementById('btnWords').addEventListener('click', () => setView('words'));
 document.getElementById('btnAI').addEventListener('click', (e) => callAI(e.shiftKey));
 document.getElementById('btnKB').addEventListener('click', () => setView('knowledge'));
+document.getElementById('btnStats').addEventListener('click', () => setView('stats'));
 apiKeyInput.addEventListener('change', () => { chrome.storage.local.set({ apiKey: apiKeyInput.value.trim() }); });
 
 const btnApiSettings = document.getElementById('btnApiSettings');
@@ -913,7 +1073,7 @@ if (btnApiSettings) {
 })();
 
 // ============ 键盘 ============
-const VIEW_ORDER = ['subtitles', 'words', 'ai', 'knowledge'];
+const VIEW_ORDER = ['subtitles', 'words', 'ai', 'knowledge', 'stats'];
 
 function handleKeyPress(key, shiftKey) {
   if (key === 'Tab') { const idx = VIEW_ORDER.indexOf(state.view); setView(VIEW_ORDER[(idx + 1) % VIEW_ORDER.length]); return; }
@@ -1118,5 +1278,25 @@ async function pollCurrentVideo() {
 }
 setInterval(pollCurrentVideo, 1500);
 
+async function autoBackfillCheckIn() {
+  // 检查生词本里是否有今天标记的词，有的话补打卡
+  const today = formatDate(new Date());
+  const hasTodayWord = Object.values(state.savedWords).some(w => 
+    w.addedAt && formatDate(new Date(w.addedAt)) === today
+  );
+  // 检查知识库里是否有今天保存的记录
+  const hasTodayKB = Object.values(state.knowledgeBase).some(e => 
+    e.savedAt && formatDate(new Date(e.savedAt)) === today
+  );
+  if ((hasTodayWord || hasTodayKB) && !state.checkInDates.includes(today)) {
+    state.checkInDates.push(today);
+    // 保留最近 365 天
+    const cutoff = formatDate(getDateNDaysAgo(365));
+    state.checkInDates = state.checkInDates.filter(d => d >= cutoff);
+    await saveCheckInDates();
+    console.log('[YT Helper] 自动补打卡：' + today);
+  }
+}
+
 console.log('[YT Helper] popup.js loaded (v6)');
-(async function init() { await loadStorage(); setView('subtitles'); await autoFetchSubtitles(); })();
+(async function init() { await loadStorage(); await autoBackfillCheckIn(); setView('subtitles'); await autoFetchSubtitles(); })();
